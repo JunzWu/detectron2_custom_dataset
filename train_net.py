@@ -74,7 +74,7 @@ def get_label_dicts(img_dir):
         for anno in annos:
             #assert not anno["region_attributes"]
             anno_shape = anno["shape_attributes"]
-            if anno_shape['name'] == 'polyline':
+            if anno_shape['name'] == 'polygon':
                 px = anno_shape["all_points_x"]
                 py = anno_shape["all_points_y"]
                 if px in pxs:
