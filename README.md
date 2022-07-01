@@ -7,3 +7,4 @@ Install the detectron2: https://detectron2.readthedocs.io/en/latest/tutorials/in
 ## Label the custom dataset
 1. Label toolkit website:
 https://www.robots.ox.ac.uk/~vgg/software/via/via.html
+2. Label tutorial:
