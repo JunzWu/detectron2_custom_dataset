@@ -84,7 +84,7 @@ def get_label_dicts(img_dir):
                 poly = [(x + 0.5, y + 0.5) for x, y in zip(px, py)]
                 poly = [p for x in poly for p in x]
                 if anno["region_attributes"] != {} and len(px)>=6:
-                    category_id = int(anno["region_attributes"]["type"])
+                    category_id = int(list(anno["region_attributes"].values())[0])
                     obj = {
                         "bbox": [np.min(px), np.min(py), np.max(px), np.max(py)],
                         "bbox_mode": BoxMode.XYXY_ABS,
