@@ -183,16 +183,19 @@ def setup(args):
     """
     Create configs and perform basic setups.
     """
-    for d in ["train_original", "val_original"]:
+    # Dataset Information
+    for d in ["train", "val"]:
         # You could change the address of image directory here
-        DatasetCatalog.register("seeds_" + d, lambda d=d: get_label_dicts("/mnt/3bcb7712-931d-490e-937d-b920d10759bc/Junz_data/detectron2/Seed/" + d))
-        MetadataCatalog.get("seeds_" + d).set(thing_classes=["Healthy", "Diseased"])
+        DatasetCatalog.register("set_" + d, lambda d=d: get_label_dicts(args.data + d))
+        MetadataCatalog.get("set_" + d).set(thing_classes=args.name_classes)
     cfg = get_cfg()
-    cfg.merge_from_file(model_zoo.get_config_file("LVISv0.5-InstanceSegmentation/mask_rcnn_R_101_FPN_1x.yaml"))
-    cfg.DATASETS.TRAIN = ("seeds_train_original",)
-    cfg.DATASETS.TEST = ("seeds_val_original",)
+    cfg.merge_from_file(model_zoo.get_config_file(args.config_file))
+    cfg.DATASETS.TRAIN = ("set_train",)
+    cfg.DATASETS.TEST = ("set_val",)
     cfg.DATALOADER.NUM_WORKERS = 2
-    cfg.MODEL.WEIGHTS = model_zoo.get_checkpoint_url("LVISv0.5-InstanceSegmentation/mask_rcnn_R_101_FPN_1x.yaml")  # Let training initialize from model zoo
+    cfg.MODEL.WEIGHTS = model_zoo.get_checkpoint_url(args.config_file)  # Let training initialize from model zoo
+    cfg.MODEL.ROI_HEADS.NUM_CLASSES = args.num_classes
+    cfg.OUTPUT_DIR = args.output_dir
     #### Hyperparameters ####
     # 1. Optimizer
     cfg.SOLVER.IMS_PER_BATCH = 2
@@ -224,10 +227,7 @@ def setup(args):
     cfg.MODEL.BACKBONE.FREEZE_AT = 2
     #### end ####       
     cfg.SOLVER.CHECKPOINT_PERIOD = 1000
-    cfg.MODEL.ROI_HEADS.NUM_CLASSES = 2  
     cfg.TEST.EVAL_PERIOD = 1000
-    cfg.OUTPUT_DIR = '/mnt/3bcb7712-931d-490e-937d-b920d10759bc/Junz_data/detectron2/seeds_output'
-    #cfg.merge_from_list(args.opts)
     cfg.freeze()
     default_setup(cfg, args)
     return cfg
@@ -263,7 +263,70 @@ def main(args):
 
 
 if __name__ == "__main__":
-    args = default_argument_parser().parse_args()
+    parser = argparse.ArgumentParser(
+        epilog=epilog
+        or f"""
+        Examples:
+
+        Run on single machine:
+            $ {sys.argv[0]} --num-gpus 8 --config-file cfg.yaml
+
+        Change some config options:
+            $ {sys.argv[0]} --config-file cfg.yaml MODEL.WEIGHTS /path/to/weight.pth SOLVER.BASE_LR 0.001
+
+        Run on multiple machines:
+            (machine0)$ {sys.argv[0]} --machine-rank 0 --num-machines 2 --dist-url <URL> [--other-flags]
+            (machine1)$ {sys.argv[0]} --machine-rank 1 --num-machines 2 --dist-url <URL> [--other-flags]
+        """,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+
+    parser.add_argument("--config-file", default="LVISv0.5-InstanceSegmentation/mask_rcnn_R_101_FPN_1x.yaml", metavar="FILE", help="path to config file")
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Whether to attempt to resume from the checkpoint directory. "
+        "See documentation of `DefaultTrainer.resume_or_load()` for what it means.",
+    )
+    parser.add_argument("--eval-only", action="store_true", help="perform evaluation only")
+    parser.add_argument("--num-gpus", type=int, default=1, help="number of gpus *per machine*")
+    parser.add_argument("--num-machines", type=int, default=1, help="total number of machines")
+    parser.add_argument(
+        "--machine-rank", type=int, default=0, help="the rank of this machine (unique per machine)"
+    )
+
+    # PyTorch still may leave orphan processes in multi-gpu training.
+    # Therefore we use a deterministic way to obtain port,
+    # so that users are aware of orphan processes by seeing the port occupied.
+    port = 2**15 + 2**14 + hash(os.getuid() if sys.platform != "win32" else 1) % 2**14
+    parser.add_argument(
+        "--dist-url",
+        default="tcp://127.0.0.1:{}".format(port),
+        help="initialization URL for pytorch distributed backend. See "
+        "https://pytorch.org/docs/stable/distributed.html for details.",
+    )
+    parser.add_argument(
+        "opts",
+        help="""
+        Modify config options at the end of the command. For Yacs configs, use
+        space-separated "PATH.KEY VALUE" pairs.
+        For python-based LazyConfig, use "path.key=value".
+        """.strip(),
+        default=None,
+        nargs=argparse.REMAINDER,
+    )
+
+    # Dataset Information
+    parser.add_argument("--data", type=str, default="/mnt/3bcb7712-931d-490e-937d-b920d10759bc/Junz_data/detectron2/Seed/", help="path to dataset")
+    parser.add_argument("--num-classes", type=int, default=2, help="total number of dataset classes")
+    parser.add_argument("--name-classes", type=list, default=["Healthy", "Diseased"], help="names of dataset classes")
+    parser.add_argument("--num-machines", type=int, default=1, help="total number of machines")
+    parser.add_argument("--output-dir", type=str, default='/mnt/3bcb7712-931d-490e-937d-b920d10759bc/Junz_data/detectron2/seeds_output', help="path to output")
+
+
+    args = parser.parse_args()
+
     print("Command Line Args:", args)
     launch(
         main,
