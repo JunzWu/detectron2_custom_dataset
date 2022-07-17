@@ -16,6 +16,8 @@ this file as an example of how to use the library.
 You may want to write your own script with your datasets and other customizations.
 """
 
+import argparse
+import sys
 import logging
 import os
 from collections import OrderedDict
@@ -108,33 +110,9 @@ def build_sem_seg_train_aug(cfg):
         # T.RandomLighting(0.1),
         T.RandomRotation([-359, 359], expand=True, center = [[0.4, 0.4], [0.6, 0.6]]),
     ]
-    if cfg.INPUT.CROP.ENABLED:
-        augs.append(
-            T.RandomCrop(
-                cfg.INPUT.CROP.TYPE,
-                cfg.INPUT.CROP.SIZE,
-            )
-        )
     
     return augs
- # Show how to implement a minimal mapper, similar to the default DatasetMapper
-def mapper(dataset_dict):
-    dataset_dict = copy.deepcopy(dataset_dict)  # it will be modified by code below
-    # can use other ways to read image
-    image = utils.read_image(dataset_dict["file_name"], format="BGR")
-    # See "Data Augmentation" tutorial for details usage
-    auginput = T.AugInput(image)
-    transform = T.Resize((800, 800))(auginput)
-    image = torch.from_numpy(auginput.image.transpose(2, 0, 1))
-    annos = [
-        utils.transform_instance_annotations(annotation, [transform], image.shape[1:])
-        for annotation in dataset_dict.pop("annotations")
-    ]
-    return {
-       # create the format that the model expects
-       "image": image,
-       "instances": utils.annotations_to_instances(annos, image.shape[1:])
-    }
+
 class Trainer(DefaultTrainer):
     """
     We use the "DefaultTrainer" which contains pre-defined default logic for
@@ -156,7 +134,7 @@ class Trainer(DefaultTrainer):
         evaluator_list = []
         evaluator_type = "coco"
         if evaluator_type in ["coco", "coco_panoptic_seg"]:
-            evaluator_list.append(COCOEvaluator("seeds_val", ("segm",), True, output_dir=output_folder))
+            evaluator_list.append(COCOEvaluator("set_val", ("segm",), True, output_dir=output_folder))
         return evaluator_list[0]
 
     # @classmethod
@@ -198,36 +176,23 @@ def setup(args):
     cfg.OUTPUT_DIR = args.output_dir
     #### Hyperparameters ####
     # 1. Optimizer
-    cfg.SOLVER.IMS_PER_BATCH = 2
-    cfg.SOLVER.BASE_LR = 0.005  # pick a good LR
-    cfg.SOLVER.MOMENTUM = 0.9
-    cfg.SOLVER.MAX_ITER = 50000   
-    cfg.SOLVER.STEPS = [7000, 20000, 30000, 40000] # define the steps to adjust the LR
-    cfg.SOLVER.WEIGHT_DECAY = 0.001
+    cfg.SOLVER.IMS_PER_BATCH = args.batch_size
+    cfg.SOLVER.BASE_LR = args.base_lr
+    cfg.SOLVER.MOMENTUM = args.momentum
+    cfg.SOLVER.MAX_ITER = args.num_iter   
+    cfg.SOLVER.STEPS = args.step
+    cfg.SOLVER.WEIGHT_DECAY = args.weight_decay
     # 2. Data augmentation
     cfg.INPUT.FORMAT = "RGB"
     cfg.MODEL.PIXEL_MEAN = [123.675, 116.280, 103.530]
-    cfg.INPUT.CROP.ENABLED = False
-    # Cropping type:
-    # - "relative" crop (H * CROP.SIZE[0], W * CROP.SIZE[1]) part of an input of size (H, W)
-    # - "relative_range" uniformly sample relative crop size from between [CROP.SIZE[0], [CROP.SIZE[1]].
-    #   and  [1, 1] and use it as in "relative" scenario.
-    # - "absolute" crop part of an input with absolute size: (CROP.SIZE[0], CROP.SIZE[1]).
-    # - "absolute_range", for an input of size (H, W), uniformly sample H_crop in
-    #   [CROP.SIZE[0], min(H, CROP.SIZE[1])] and W_crop in [CROP.SIZE[0], min(W, CROP.SIZE[1])]
-    # Size of crop in range (0, 1] if CROP.TYPE is "relative" or "relative_range" and in number of
-    cfg.INPUT.CROP.TYPE = "relative_range"
-    # Size of crop in range (0, 1] if CROP.TYPE is "relative" or "relative_range" and in number of
-    # pixels if CROP.TYPE is "absolute"
-    cfg.INPUT.CROP.SIZE = [0.9, 0.9]
     # 3. Transfer learning
     # Freeze the first several stages so they are not trained.
     # There are 5 stages in ResNet. The first is a convolution, and the following
     # stages are each group of residual blocks.
-    cfg.MODEL.BACKBONE.FREEZE_AT = 2
-    #### end ####       
-    cfg.SOLVER.CHECKPOINT_PERIOD = 1000
-    cfg.TEST.EVAL_PERIOD = 1000
+    cfg.MODEL.BACKBONE.FREEZE_AT = args.freeze_level
+    #### end ####
+    cfg.SOLVER.CHECKPOINT_PERIOD = args.ckpt_period
+    cfg.TEST.EVAL_PERIOD = args.eval_period
     cfg.freeze()
     default_setup(cfg, args)
     return cfg
@@ -242,10 +207,6 @@ def main(args):
             cfg.MODEL.WEIGHTS, resume=args.resume
         )
         res = Trainer.test(cfg, model)
-        # if cfg.TEST.AUG.ENABLED:
-        #     res.update(Trainer.test_with_TTA(cfg, model))
-        # if comm.is_main_process():
-        #     verify_results(cfg, res)
         return res
 
     """
@@ -255,32 +216,14 @@ def main(args):
     """
     trainer = Trainer(cfg)
     trainer.resume_or_load(resume=False)
-    # if cfg.TEST.AUG.ENABLED:
-    #     trainer.register_hooks(
-    #         [hooks.EvalHook(0, lambda: trainer.test_with_TTA(cfg, trainer.model))]
-    #     )
     return trainer.train()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        epilog=epilog
-        or f"""
-        Examples:
-
-        Run on single machine:
-            $ {sys.argv[0]} --num-gpus 8 --config-file cfg.yaml
-
-        Change some config options:
-            $ {sys.argv[0]} --config-file cfg.yaml MODEL.WEIGHTS /path/to/weight.pth SOLVER.BASE_LR 0.001
-
-        Run on multiple machines:
-            (machine0)$ {sys.argv[0]} --machine-rank 0 --num-machines 2 --dist-url <URL> [--other-flags]
-            (machine1)$ {sys.argv[0]} --machine-rank 1 --num-machines 2 --dist-url <URL> [--other-flags]
-        """,
+        epilog=None,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-
 
     parser.add_argument("--config-file", default="LVISv0.5-InstanceSegmentation/mask_rcnn_R_101_FPN_1x.yaml", metavar="FILE", help="path to config file")
     parser.add_argument(
@@ -323,7 +266,22 @@ if __name__ == "__main__":
     parser.add_argument("--name-classes", type=list, default=["Healthy", "Diseased"], help="names of dataset classes")
     parser.add_argument("--num-machines", type=int, default=1, help="total number of machines")
     parser.add_argument("--output-dir", type=str, default='/mnt/3bcb7712-931d-490e-937d-b920d10759bc/Junz_data/detectron2/seeds_output', help="path to output")
-
+    
+    #### Hyperparameters ####
+    # 1. Optimizer
+    parser.add_argument("--batch-size", type=int, default=2)
+    parser.add_argument("--base-lr", type=float, default=0.005)
+    parser.add_argument("--momentum", type=float, default=0.9)
+    parser.add_argument("--num-iter", type=int, default=50000, help="total number of iterations")
+    parser.add_argument("--step", type=list, default=[10000, 20000, 30000, 40000], help="the steps to adjust the LR (multiply LR with 0.1)")
+    parser.add_argument("--weight-decay", type=float, default=0.001)
+    # 3. Transfer learning
+    # Freeze the first several stages so they are not trained.
+    # There are 5 stages in ResNet. The first is a convolution, and the following stages are each group of residual blocks.
+    parser.add_argument("--freeze-level", type=int, default=2)
+    #### end ####
+    parser.add_argument("--ckpt-period", type=int, default=1000, help="period of saving checkpoints")
+    parser.add_argument("--eval-period", type=int, default=1000, help="period of evaluation")
 
     args = parser.parse_args()
 
